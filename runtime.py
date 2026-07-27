@@ -46,6 +46,41 @@ def canonical_json(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
 
 
+def _warn_unread_input(ctx, node, supplied) -> None:
+    """Say so when a field in the request is not one this node reads.
+
+    An unrecognised field is dropped and the node's declared default used instead, silently. Measured
+    on a sibling ASP, where a caller asking for two venues via a misspelled key received five computed
+    from defaults, and on another where a 120-character cap became 8,079 characters. Nothing in the
+    response said the field had been discarded, so the caller had no way to tell they had been
+    answered a different question from the one they asked and paid for.
+
+    A warning rather than a refusal: rejecting an unexpected field would break any client sending one
+    today, which is too high a price for catching a typo. Warnings travel in the envelope and are
+    covered by the signature, so the notice cannot be separated from the answer it qualifies.
+
+    Nodes that declare no fields are left alone — inventing an accepted set we cannot derive would
+    flag correct calls, and a checker that cries wolf gets ignored.
+    """
+    import difflib
+
+    accepted = set(getattr(node, "requires", ()) or ()) | set(getattr(node, "optional", ()) or ())
+    if not accepted or not isinstance(supplied, dict):
+        return
+    unknown = sorted(k for k in supplied if k not in accepted)
+    if not unknown:
+        return
+    hints = []
+    for key in unknown:
+        near = difflib.get_close_matches(key, sorted(accepted), n=1, cutoff=0.7)
+        hints.append(f"{key!r}" + (f" (did you mean {near[0]!r}?)" if near else ""))
+    ctx.warn(
+        "Ignored, because this service does not read "
+        + ("them: " if len(unknown) > 1 else "it: ") + ", ".join(hints)
+        + ". The default was used instead, so this answer may not be the one you intended. "
+          "Accepted fields: " + ", ".join(sorted(accepted)) + ".")
+
+
 def sha256_hex(data) -> str:
     if isinstance(data, str):
         data = data.encode("utf-8")
@@ -358,6 +393,7 @@ class Runtime:
                               ErrorCode.INVALID_INPUT, f"unknown endpoint '{request.endpoint}'", started)
 
         ctx = NodeContext(request, self.settings, job_id)
+        _warn_unread_input(ctx, node, request.input)
         input_hashes = [sha256_hex(request.input)]
         params_hash = sha256_hex(request.options)
 
