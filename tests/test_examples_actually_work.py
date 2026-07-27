@@ -53,6 +53,47 @@ def test_the_documented_example_succeeds(endpoint):
     assert env["status"] != "failed"
 
 
+@pytest.mark.network
+@pytest.mark.parametrize("endpoint", sorted(NEEDS_NETWORK_OR_MODEL & set(ALL_ENDPOINTS)))
+def test_the_documented_example_succeeds_online(endpoint):
+    """The same guarantee for the nodes that fetch or call a model.
+
+    Marked `network` so the default run stays offline and free, but it exists because this is where
+    the defects actually were: three of the four broken examples found by buying the catalogue were
+    nodes excluded from the offline sweep — two pointing at `example.com`, one at `rival.com`.
+    Placeholder domains look harmless in a diff and fail every time in production.
+    """
+    node = REGISTRY.get(endpoint)
+    example = getattr(node, "example_input", None)
+    assert example, f"{endpoint} advertises no example; a buyer has nothing to copy"
+
+    env = RUNTIME.execute(ArtifactRequest(endpoint=endpoint, input=example)).model_dump()
+    assert env["ok"] is True, (
+        f"{endpoint}: the advertised example fails — "
+        f"{(env.get('error') or {}).get('message', env.get('status'))}")
+
+
+def test_no_example_points_at_a_domain_that_serves_nothing():
+    """Offline and total: catches the whole class without fetching anything.
+
+    Deliberately **not** a ban on `example.com`. Buying the catalogue showed 25 services auditing it
+    successfully — it is a real, stable, fetchable page, and a blanket rule would have forced 27
+    working examples to change for nothing. The domains below are different in kind: they resolve to
+    nothing auditable, so any example built on one is a paid failure by construction. `rival.com` was
+    exactly that, on the $0.15 service.
+    """
+    placeholders = ("rival.com", "competitor.com", "yoursite.com", "mysite.com",
+                    "yourdomain.com", "yoursite.example", "acme.com", "foo.com")
+    offenders = []
+    for info in REGISTRY.list():
+        node = REGISTRY.get(info["endpoint"])
+        blob = str(getattr(node, "example_input", "") or "").lower()
+        hits = [p for p in placeholders if p in blob]
+        if hits:
+            offenders.append(f"{info['endpoint']} -> {hits}")
+    assert not offenders, "examples pointing at placeholder domains: " + "; ".join(offenders)
+
+
 def test_diffing_two_clean_audits_is_a_result_not_an_error():
     """Someone confirming a regression-free deploy is asking a real question, and paying for it."""
     env = RUNTIME.execute(ArtifactRequest(

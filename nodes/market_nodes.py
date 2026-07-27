@@ -392,7 +392,9 @@ class LinksCompare(_MarketNode):
     price_usdt = 0.20
     requires = ("domain", "competitor")
     optional = ("sources",)
-    example_input = {"domain": "example.com", "competitor": "rival.com"}
+    # rival.com is a placeholder, not a site anyone can measure citations for. Both sides of a
+    # comparison have to be real or the example is a paid failure waiting to happen.
+    example_input = {"domain": "stripe.com", "competitor": "adyen.com"}
 
     def run(self, ctx: NodeContext) -> dict:
         raw = ctx.input if isinstance(ctx.input, dict) else {}

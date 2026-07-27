@@ -53,8 +53,11 @@ class CompeteCompare(Node):
     price_usdt = 0.15
     requires = ("url", "competitor")
     optional = ()
-    example_input = {"url": "https://example.com/",
-                     "competitor": "https://rival.com/"}
+    # Both sides must be pages that can actually be fetched and audited. This advertised
+    # https://rival.com/, which does not serve HTML, so the documented example failed with
+    # POLICY_BLOCKED — at $0.15, the dearest way in this catalogue to pay for nothing.
+    example_input = {"url": "https://en.wikipedia.org/wiki/Search_engine_optimization",
+                     "competitor": "https://en.wikipedia.org/wiki/Web_crawler"}
     asp_type = "A2MCP"
     engine = "doxa-html"
     engine_version = "1.0"
