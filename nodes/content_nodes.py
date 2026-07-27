@@ -307,22 +307,44 @@ class ContentCharts(_ContentNode):
     def run(self, ctx: NodeContext) -> dict:
         url, page = self._page(ctx)
         text = body_text(page)
-        found = STATISTIC.findall(text)
-        if not found:
-            return {"url": url, "figures": [], "dataset_jsonld": None,
-                    "html_table": None,
-                    "note": ("The page contains no concrete figures, so there is nothing to "
-                             "structure. Adding specific numbers is the prerequisite.")}
+        found = list(STATISTIC.finditer(text))
+        kinds: dict[str, int] = {}
+        for m in found:
+            k = _classify(m.group(0))
+            kinds[k] = kinds.get(k, 0) + 1
+        matches = [m for m in found if _classify(m.group(0)) in _CHARTABLE]
+
+        if not matches:
+            breakdown = ", ".join(f"{n} {k}" + ("s" if n != 1 and not k.endswith("s") else "")
+                                  for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
+            note = ("The page contains no concrete figures, so there is nothing to structure. "
+                    "Adding specific numbers is the prerequisite.")
+            if found:
+                note = (f"The page states {len(found)} numeric values ({breakdown}) and none is a "
+                        f"measurement. Dates and version strings are temporal signals, not figures a "
+                        f"model can cite you for — a Dataset of them would be valid and useless. "
+                        f"Publishing percentages, amounts or magnitudes is the prerequisite.")
+            return {"url": url, "figures": [], "figures_rejected": 0,
+                    "statistics_detected_in_text": len(found), "numeric_values_by_kind": kinds,
+                    "chartable_values_found": 0,
+                    "excerpt_covers_every_figure": True, "excerpt_sent_covers": 0,
+                    "dataset_jsonld": None, "html_table": None, "note": note}
+
+        excerpt, covered = _figure_excerpt(text, matches)
+        if not covered:
+            ctx.warn(f"The page states {len(matches)} figures, more than one extraction window "
+                     f"holds. The excerpt sent for labelling covers the first "
+                     f"{min(len(matches), _MAX_FIGURES)} of them, in document order.")
 
         data = self._ask_json(
             "Extract every concrete figure stated in the text below and label it.\n\n"
             "Rules, strictly: use ONLY figures that literally appear in the text. Do not compute, "
             "convert, round or infer any value. If you are unsure what a number refers to, omit it.\n\n"
-            f"TEXT:\n{text[:4000]}\n\n"
+            f"TEXT:\n{excerpt}\n\n"
             'Return JSON: {"figures": [{"label": "what it measures", "value": "exactly as written '
             'in the text", "unit": "percent|currency|count|duration|date|other", '
             '"context": "the phrase it appeared in"}]}',
-            max_tokens=2600, expect_key="figures")
+            max_tokens=4000, expect_key="figures")
 
         raw_figures = (data or {}).get("figures") or []
         verified, rejected = [], []
@@ -360,14 +382,31 @@ class ContentCharts(_ContentNode):
                  f"<th>Measure</th><th>Value</th><th>Unit</th></tr></thead>"
                  f"<tbody>{rows}</tbody></table>") if verified else None
 
+        # A page can state numbers and still have nothing to chart — a news feed's dates, a version
+        # string, a copyright range. Saying so is the difference between a useful answer and one the
+        # customer reads as a failure.
+        note = ("Every figure here appears verbatim in the page. Anything the model produced that "
+                "the page does not state was discarded.")
+        if not verified:
+            note = (f"The page states {len(matches)} measurable value(s) and the extractor could not "
+                    f"label any of them with confidence. All of them were shown to it, so this is "
+                    f"not a truncated read — the figures appear without enough surrounding text to "
+                    f"say what they measure.")
+        if covered is False:
+            note += (f" This page states more figures than one call can label; the first "
+                     f"{_MAX_FIGURES} in document order were processed.")
+
         return {"url": url,
                 "figures": verified,
                 "figures_rejected": len(rejected),
                 "statistics_detected_in_text": len(found),
+                "numeric_values_by_kind": kinds,
+                "chartable_values_found": len(matches),
+                "excerpt_covers_every_figure": covered,
+                "excerpt_sent_covers": sum(1 for m in matches if _contains(excerpt, m.group(0))),
                 "dataset_jsonld": jsonld,
                 "html_table": table,
-                "note": ("Every figure here appears verbatim in the page. Anything the model "
-                         "produced that the page does not state was discarded.")}
+                "note": note}
 
     def validate(self, result: dict, ctx: NodeContext) -> list[ValidationCheck]:
         figures = result["figures"]
@@ -384,7 +423,90 @@ class ContentCharts(_ContentNode):
             ValidationCheck(name="unverifiable_figures_were_discarded",
                             passed=isinstance(result["figures_rejected"], int),
                             detail="a fabricated statistic in structured data is worse than none"),
+            # "18 detected, 0 extracted, 0 rejected" was a real bug: the excerpt sent for labelling
+            # was the head of the page and every figure sat past it. What is checked is therefore
+            # the invariant that broke — the numbers the page states were actually shown to the
+            # extractor — and not whether the model chose to label them, which for a page whose only
+            # numbers are news dates is legitimately zero.
+            ValidationCheck(
+                name="every_chartable_value_was_shown_to_the_extractor",
+                passed=result["excerpt_sent_covers"] == result["chartable_values_found"]
+                or not result.get("excerpt_covers_every_figure"),
+                detail="a figure the extractor never saw cannot be labelled or rejected"),
         ]
+
+
+_BUDGET = 6000       # characters of page text sent for labelling
+_MARGIN = 220        # characters kept either side of a figure, so its sentence comes with it
+_MAX_FIGURES = 40    # figures asked for in one call
+
+# Not every number is a measurement, and reporting a count of "statistics" that is really a list of
+# news dates reads as a broken service. geo-optimizer-skill's decay audit separates temporal, version
+# and price signals from statistical ones (src/geo_optimizer/core/audit_decay.py); the same split
+# turns "18 statistics detected, 0 charted" into a sentence a customer can act on.
+_KINDS = (
+    ("percentage", re.compile(r"^\d+(?:\.\d+)?\s?(?:%|percent|bps)$", re.I)),
+    ("currency", re.compile(r"^[$€£¥]", re.I)),
+    ("magnitude", re.compile(r"(?:million|billion|trillion|thousand)$", re.I)),
+    ("multiplier", re.compile(r"(?:x|×)$", re.I)),
+    ("year", re.compile(r"^(?:19|20)\d{2}$")),
+    ("measurement", re.compile(r"(?:ms|kb|mb|gb|tb|kg|km|mi|hrs?|hours?|days?|weeks?|months?|years?)$",
+                               re.I)),
+    ("large number", re.compile(r"^\d{1,3}(?:,\d{3})+$")),
+)
+
+
+# A bare year is a temporal signal, not a measurement. Charting one produces a schema.org Dataset of
+# news dates: valid, machine-readable and worthless. Excluding the kind up front also makes the
+# service deterministic — asking a model whether "2026" is a figure returns a different answer each
+# run, and a paid service that alternates between 0 and 18 rows for one page is not trustworthy.
+_CHARTABLE = {"percentage", "currency", "magnitude", "multiplier", "measurement", "large number"}
+
+
+def _classify(token: str) -> str:
+    for kind, pattern in _KINDS:
+        if pattern.search(token.strip()):
+            return kind
+    return "other"
+
+
+def _figure_excerpt(text: str, matches: list) -> tuple[str, bool]:
+    """Build the extraction window *around the figures*, not from the top of the page.
+
+    Sending a blind prefix is the obvious implementation and it is wrong: on python.org every one of
+    the eighteen figures begins at character 4006, so a 4,000-character head contains none of them.
+    The model then correctly returns nothing, and the service reports "18 statistics detected, 0
+    extracted, 0 rejected" — a contradiction the customer has no way to explain, having paid for it.
+
+    So: keep a margin either side of each match (a bare number is unlabelable without its sentence),
+    merge spans that touch, and spend the budget on them in document order. Returns the excerpt and
+    whether every figure made it in, which the caller discloses rather than quietly truncating.
+    """
+    if not matches:
+        return "", True
+    # Wikipedia's Python article states 484 numbers. Asking one call to label them all exhausts the
+    # model's token budget inside its own reasoning block and returns nothing at all — and a table of
+    # 484 rows would not be a deliverable anyway. Bound the count as well as the characters.
+    capped = len(matches) > _MAX_FIGURES
+    matches = matches[:_MAX_FIGURES]
+    spans: list[list[int]] = []
+    for m in matches:
+        lo, hi = max(0, m.start() - _MARGIN), min(len(text), m.end() + _MARGIN)
+        if spans and lo <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], hi)
+        else:
+            spans.append([lo, hi])
+
+    kept, spent, covered = [], 0, True
+    for lo, hi in spans:
+        if spent + (hi - lo) > _BUDGET:
+            covered = False
+            break
+        kept.append(text[lo:hi])
+        spent += hi - lo
+    if not kept:                                   # one span alone exceeds the budget
+        kept, covered = [text[spans[0][0]:spans[0][0] + _BUDGET]], False
+    return "\n[…]\n".join(kept), covered and not capped
 
 
 def _esc(v: Any) -> str:

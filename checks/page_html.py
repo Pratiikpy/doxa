@@ -10,6 +10,7 @@ SVG, or a `<title>` in the body rather than the head all produce a confidently w
 from __future__ import annotations
 
 import re
+import unicodedata
 import urllib.parse
 from typing import Any
 
@@ -314,6 +315,13 @@ def check_viewport(page: Page) -> list[Finding]:
 
 NON_CONTENT = ("script", "style", "noscript", "template", "svg")
 
+# Tags that end a line of running text. Everything absent here — <b>, <em>, <span>, <a>, <time>,
+# <code> — is inline and must not introduce a space, or words split at their own markup.
+BLOCK_LEVEL = ("address", "article", "aside", "blockquote", "br", "dd", "details", "dialog", "div",
+               "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+               "h4", "h5", "h6", "header", "hgroup", "hr", "li", "main", "nav", "ol", "p", "pre",
+               "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul")
+
 
 def body_text(page: Page) -> str:
     """The words a reader actually sees on the page.
@@ -327,6 +335,13 @@ def body_text(page: Page) -> str:
     And it parses its own document rather than decomposing tags out of the shared soup. Every check
     reads that same cached object; stripping ``<script>`` for a word count would delete those scripts
     from the document every later check sees.
+
+    The separator is the third mistake, and the subtlest. ``get_text(" ")`` puts a space between
+    *every* text node, inline ones included, so ``Py<b>thon</b>`` becomes "Py thon" — two words where
+    a reader sees one — and python.org's ``<time>2026-<span>07-23</span></time>`` becomes
+    "2026- 07-23", which a figure extractor then quotes with the space in it. ``get_text("")`` fixes
+    that and breaks the other end, running "…07-23" straight into the next paragraph. Only block
+    boundaries are word boundaries, so only block boundaries get a separator.
     """
     cached = getattr(page, "_body_text", None)
     if cached is None:
@@ -334,20 +349,54 @@ def body_text(page: Page) -> str:
         root = s.body or s
         for tag in root(NON_CONTENT):
             tag.decompose()
-        cached = re.sub(r"\s+", " ", root.get_text(" ")).strip()
+        for tag in root(BLOCK_LEVEL):
+            tag.insert_before("\n")
+            tag.insert_after("\n")
+        cached = re.sub(r"\s+", " ", root.get_text("")).strip()
         setattr(page, "_body_text", cached)
+    return cached
+
+
+def content_words(page: Page) -> int:
+    """Words of body copy, counted the way the 200-word threshold was calibrated.
+
+    Porting a threshold means porting the measurement under it, and this is where the two diverge.
+    SEONaut's ``countWords`` (internal/services/html_parser.go) skips the entire subtree of every
+    ``<a>`` element and replaces Unicode punctuation and symbols with spaces before splitting. So its
+    200 counts *prose*, not navigation: a page carrying 100 words of link text and 120 of copy is
+    thin by that measure and comfortably over the line by a naive one.
+
+    The gap is not marginal — python.org measures 1,024 words split naively and 592 SEONaut's way.
+    Applying a borrowed number to a different quantity is how a check quietly stops firing.
+
+    One deliberate deviation: SEONaut skips only ``<script>`` text, so stylesheet and ``<noscript>``
+    content counts toward its total. Doxa strips all of ``NON_CONTENT``, because counting CSS as
+    prose inflates the figure in the direction that hides thin pages.
+    """
+    cached = getattr(page, "_content_words", None)
+    if cached is None:
+        s = BeautifulSoup(page.html or "", "lxml")
+        root = s.body or s
+        for tag in root(NON_CONTENT):
+            tag.decompose()
+        for tag in root("a"):
+            tag.decompose()
+        text = root.get_text(" ")
+        text = "".join(" " if unicodedata.category(ch)[0] in "PS" else ch for ch in text)
+        cached = len(text.split())
+        setattr(page, "_content_words", cached)
     return cached
 
 
 @registry.register("content", "Content volume")
 def check_content(page: Page) -> list[Finding]:
     s = soup(page)
-    words = len(body_text(page).split())
+    words = content_words(page)
     out: list[Finding] = []
     if words < 200:
         out.append(Finding("content.thin", Severity.HIGH if words < 50 else Severity.LOW,
-                           f"The page has about {words} words of visible text. SEONaut treats under "
-                           f"200 as thin.", {"words": words}))
+                           f"The page has about {words} words of body copy, excluding link text. "
+                           f"SEONaut treats under 200 as thin.", {"words": words}))
     # DOM size is a real cost for both browsers and models: an enormous DOM is slow to render and
     # eats a model's context before the content does.
     nodes = len(s.find_all(True))

@@ -207,12 +207,28 @@ def main() -> int:
     failed = [r for r in rows if r["problems"]]
     print(f"\n{len(rows) - len(failed)}/{len(rows)} services bought and delivered")
     print(f"total spent: {spent:.3f} USD₮0 across {sum(1 for r in rows if r.get('tx'))} settlements")
-    Path(Path(__file__).resolve().parent.parent / ".deliverables.json").write_text(
-        json.dumps({r["endpoint"]: r.pop("deliverable", None) for r in rows}, indent=1,
-                   ensure_ascii=False), encoding="utf-8")
-    out = Path(__file__).resolve().parent.parent / ".paid-sweep.json"
+    # A filtered run must not discard the rest of the record. `--only robots.check` used to replace
+    # thirty-six rows with one, silently destroying the evidence the proof deck is generated from;
+    # the deck would then have rendered "1/1 delivered" from a run that bought everything.
+    root = Path(__file__).resolve().parent.parent
+    deliverables_path, out = root / ".deliverables.json", root / ".paid-sweep.json"
+    fresh_deliverables = {r["endpoint"]: r.pop("deliverable", None) for r in rows}
+    bought = {r["endpoint"] for r in rows}
+
+    if args.only:
+        previous = json.loads(out.read_text(encoding="utf-8")) if out.exists() else []
+        rows = [r for r in previous if r["endpoint"] not in bought] + rows
+        if deliverables_path.exists():
+            kept = json.loads(deliverables_path.read_text(encoding="utf-8"))
+            kept.update(fresh_deliverables)
+            fresh_deliverables = kept
+        order = {name: i for i, name in enumerate(CASES)}
+        rows.sort(key=lambda r: order.get(r["endpoint"], len(order)))
+
+    deliverables_path.write_text(json.dumps(fresh_deliverables, indent=1, ensure_ascii=False),
+                                 encoding="utf-8")
     out.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    print(f"transaction hashes written to {out.name}")
+    print(f"transaction hashes written to {out.name} ({len(rows)} rows on record)")
     return 1 if failed else 0
 
 

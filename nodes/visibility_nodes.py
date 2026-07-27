@@ -93,10 +93,45 @@ def _mentions(text: str, aliases: list[str], host: str) -> dict[str, Any] | None
 # row, or a top-level bullet that leads with a bolded name. Deliberately NOT plain sub-bullets — those
 # are the feature lines *under* a recommendation.
 _NUMBERED = re.compile(r"^\s{0,3}\d+[.)]\s+(\S.*)$")
+# Models very often write the ranked list in bold — "**1. Notion** — best overall". That is the same
+# structure as a plain numbered item and the strongest possible statement of order, but neither
+# _NUMBERED (the digit is not at the start) nor _BOLD_BULLET (there is no bullet character) matches
+# it. Missing it meant the model's own ranking was invisible and a section heading got counted
+# instead, so an answer whose first line read "**1. Notion**" reported rank 11.
+_BOLD_NUMBERED = re.compile(r"^\s{0,3}\*\*\s*\d+[.)]\s*([^*]+?)\s*\*\*")
 _HEADING = re.compile(r"^\s{0,3}#{2,4}\s+(\S.*)$")
 _TABLE_ROW = re.compile(r"^\s*\|\s*([^|]+?)\s*\|")
 _BOLD_BULLET = re.compile(r"^\s{0,3}[-*•]\s+\*\*([^*]+)\*\*")
 _TABLE_DIVIDER = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+
+# A bold line with no bullet and no number — "**🥇 Notion** – Best for docs" — is how models most
+# often mark each recommendation. It matched nothing, so "## Top Recommendations" was counted as the
+# first item and the products beneath it were never seen.
+_BOLD_LEAD = re.compile(r"^\s{0,3}\*\*([^*]+)\*\*")
+
+# A heading that bolds a name inside it — "## 🏆 Top Pick: **Notion**" — announces one specific
+# product, unlike "## Top Recommendations", which labels a section. Answers routinely introduce the
+# winner as a heading and the runners-up as bold lines, so these two have to be read as one list or
+# the top pick is dropped and the rank comes back empty.
+_HEADING_BOLD = re.compile(r"^\s{0,3}#{2,4}\s+.*?\*\*([^*]+)\*\*")
+
+# Decoration in front of a name: medals, bullets, arrows. "🥇 Notion" is the product Notion.
+_DECORATION = re.compile(r"^[^\w(]+")
+
+# Structures ranked by how strongly they mark a distinct recommendation. The most specific tier that
+# appears at least twice wins, and weaker tiers are ignored — mixing them is what let section
+# headings share a list with products and shift every rank.
+#
+# A bold name alone on its line ("**Notion** — best for docs") heads a recommendation. A bold phrase
+# *inside* a bullet is usually a label in running prose — "- **Small/medium team, want flexibility**
+# → Notion" is advice about who should pick what, not a ranking — so it sits below headings, not
+# above them. Separating the two is what keeps both real answers parsing correctly.
+_TIERS = (
+    (_NUMBERED, _BOLD_NUMBERED),      # an explicit ordering; unambiguous
+    (_HEADING_BOLD, _BOLD_LEAD),      # a bold product name, in a heading or on its own line
+    (_HEADING, _TABLE_ROW),           # sectioned or tabulated recommendations
+    (_BOLD_BULLET,),                  # last resort: bold inside a bullet
+)
 
 
 def ranked_items(text: str) -> list[str]:
@@ -107,23 +142,33 @@ def ranked_items(text: str) -> list[str]:
     whose literal words were "Top pick: Notion" was reported as rank 6. A wrong rank is worse than no
     rank, because the customer believes it.
     """
-    items: list[str] = []
-    for line in (text or "").splitlines():
-        if _TABLE_DIVIDER.match(line):
-            continue
-        for rx in (_NUMBERED, _HEADING, _BOLD_BULLET, _TABLE_ROW):
-            m = rx.match(line)
-            if m:
-                label = m.group(1).strip()
-                # A heading ending in a colon labels a section ("Other strong options:") rather than
-                # naming a recommendation, and counting it pushes every product below it down a place.
-                if not label or label.rstrip().endswith(":"):
+    def collect(patterns: tuple) -> list[str]:
+        found: list[str] = []
+        for line in (text or "").splitlines():
+            if _TABLE_DIVIDER.match(line):
+                continue
+            for rx in patterns:
+                m = rx.match(line)
+                if m:
+                    # Strip the decoration in front of a name and any emphasis markers the pattern
+                    # did not consume, so a label reads "Confluence + Jira" and not "Confluence + Jira**".
+                    label = _DECORATION.sub("", m.group(1).strip()).strip().strip("*_ ").strip()
+                    # A heading ending in a colon labels a section ("Other strong options:") rather
+                    # than naming a recommendation, and counting it pushes every product below it
+                    # down a place.
+                    if not label or label.rstrip().endswith(":"):
+                        break
+                    if label.lower().startswith(("tool", "name", "option", "---")):
+                        break
+                    found.append(label)
                     break
-                if label.lower().startswith(("tool", "name", "option", "---")):
-                    break
-                items.append(label)
-                break
-    return items
+        return found
+
+    for tier in _TIERS:
+        items = collect(tier)
+        if len(items) >= 2:
+            return items
+    return []
 
 
 def _rank_of(text: str, evidence: dict[str, Any]) -> int | None:

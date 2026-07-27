@@ -45,9 +45,10 @@ DESCRIPTIONS: dict[str, str] = {
                   "headings, indexability, language, viewport, links, images, structured data and "
                   "security headers. Returns every fault with a stable code, a plain explanation and "
                   "the evidence behind it.",
-    "page.links": "Requests every link on the page and reports what actually came back. Returns the "
-                  "broken links, the ones that redirect, and the ones that could not be checked, each "
-                  "with its status.",
+    "page.links": "Requests the page's links, up to the limit you set (150 by default), and reports "
+                  "what actually came back. Returns the broken links, the ones that redirect and the "
+                  "ones that could not be checked, each with its status, and says how many were left "
+                  "unchecked.",
     "page.images": "Inspects every image for missing alt text, missing dimensions, broken sources and "
                    "oversized files. Returns the offending images with their sizes so the heavy ones "
                    "can be fixed first.",
@@ -60,9 +61,9 @@ DESCRIPTIONS: dict[str, str] = {
     "page.asai": "Fetches the page twice, once as raw HTML and once with JavaScript executed, and "
                  "diffs the readable text. Returns how much of your content exists only after "
                  "JavaScript runs, and is therefore invisible to crawlers that do not execute it.",
-    "page.blocked": "Presents each AI crawler's real user-agent and compares the response with what a "
-                    "browser receives. Returns which crawlers your CDN refuses or serves a smaller "
-                    "page to — something robots.txt cannot tell you.",
+    "page.blocked": "Presents six AI crawlers' real user-agents by default, or the ones you name, and "
+                    "compares the response with what a browser receives. Returns which crawlers your "
+                    "CDN refuses or serves a smaller page to — something robots.txt cannot tell you.",
     "llms.check": "Checks whether the site publishes a valid /llms.txt and how complete it is. Returns "
                   "its structure, size and link count, or a note that it is absent.",
     "robots.check": "Parses robots.txt with the longest-match rule real crawlers use and evaluates it "
@@ -83,13 +84,14 @@ DESCRIPTIONS: dict[str, str] = {
                      "and measures how often you are recommended. Returns the mention rate, your rank "
                      "where the answer was ranked, and the sentence that mentioned you.",
     "ai.brand": "Asks models to describe your brand and reports what they say. Returns each "
-                "description in full alongside your own site copy, so you can see where they are "
-                "stale, vague or wrong.",
-    "ai.citations": "Finds who models recommend in your market instead of you. Returns each competitor "
-                    "with how often it was named and for which questions.",
+                "description alongside your own site copy, up to 1,500 characters each, so you can "
+                "see where they are stale, vague or wrong.",
+    "ai.citations": "Finds who models recommend in your market instead of you. Returns every product "
+                    "and vendor named alongside or instead of you, with how often and for which "
+                    "questions.",
     "ai.prompts": "Derives the questions a buyer would ask before they know you exist, from what your "
                   "site says it does. Returns a prompt set you can use as a visibility baseline.",
-    "site.audit": "Crawls the site within a page and time budget you set, then runs the nine checks "
+    "site.audit": "Crawls the site within a page and time budget you set, then runs the eight checks "
                   "that only a whole crawl can perform — duplicate titles, descriptions and bodies, "
                   "orphan pages, click depth, redirect chains and canonical conflicts. Returns every "
                   "fault with the pages involved, and states exactly where the crawl stopped.",
@@ -182,7 +184,20 @@ def root() -> dict:
             "tagline": "Nothing is optimised until it is measured.",
             "services": len(REGISTRY.list()),
             "docs": "/services",
+            "proof": "/proof",
+            "verify": "/verify",
             "health": "/health"}
+
+
+@app.get("/proof", response_class=Response)
+def proof_deck() -> Response:
+    """Every service, bought for real, with the answer it returned.
+
+    Rendered from a recorded run rather than written by hand, so the page cannot claim a number that
+    did not happen. Free and unauthenticated: evidence nobody can read is not evidence.
+    """
+    import proof
+    return Response(content=proof.page(), media_type="text/html; charset=utf-8")
 
 
 @app.get("/health")

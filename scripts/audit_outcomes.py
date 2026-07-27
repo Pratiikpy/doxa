@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sys
+import unicodedata
 from pathlib import Path
 
 import requests
@@ -52,7 +53,30 @@ def ground_truth() -> dict:
                               if (m.get("name") or "") == "viewport"]),
         "robots_mentions_ai": any(b in robots for b in ("GPTBot", "ClaudeBot", "PerplexityBot")),
         "llms_txt_exists": llms.status_code == 200,
+        # Counted here the way SEONaut's countWords does, independently of Doxa's own helper, so a
+        # regression in `content_words()` fails this audit rather than agreeing with itself.
+        "prose_words": _seonaut_word_count(r.text),
+        "naive_words": len(BeautifulSoup(r.text, "lxml").body.get_text(" ").split()),
     }
+
+
+def _seonaut_word_count(html: str) -> int:
+    """SEONaut's measurement, reimplemented from their Go source rather than called from ours.
+
+    `internal/services/html_parser.go`: skip the whole subtree of every `<a>`, drop `<script>`, then
+    replace Unicode punctuation and symbols with spaces before splitting. The 200-word thin-content
+    threshold is calibrated on this, not on a naive split — python.org measures 592 this way and
+    1,024 naively.
+    """
+    s = BeautifulSoup(html or "", "lxml")
+    root = s.body or s
+    for tag in root(("script", "style", "noscript", "template", "svg")):
+        tag.decompose()
+    for tag in root("a"):
+        tag.decompose()
+    text = "".join(" " if unicodedata.category(ch)[0] in "PS" else ch
+                   for ch in root.get_text(" "))
+    return len(text.split())
 
 
 def codes(d: dict) -> set[str]:
@@ -91,6 +115,16 @@ def audit(deliverables: dict, gt: dict) -> list[tuple[str, bool, str]]:
     out.append(check("every critical/high finding carries evidence",
                      all(f.get("detail") is not None for f in d.get("findings", [])
                          if f["severity"] in ("critical", "high"))))
+    # The thin-content threshold is SEONaut's. It has to be applied to SEONaut's measurement, or a
+    # nav-heavy page clears 200 on link text alone and the check silently stops firing.
+    thin = next((f for f in d.get("findings", []) if f["code"] == "content.thin"), None)
+    reported = (thin or {}).get("detail", {}).get("words")
+    out.append(check("word count excludes link text, as the ported threshold requires",
+                     thin is None or abs(reported - gt["prose_words"]) <= max(8, gt["prose_words"] // 50),
+                     f"reported {reported}, SEONaut method {gt['prose_words']}, "
+                     f"naive {gt['naive_words']}"))
+    out.append(check(f"{gt['prose_words']} words of prose is over 200, so no thin finding",
+                     (thin is None) == (gt["prose_words"] >= 200)))
 
     # --- robots.check, against the real robots.txt ----------------------------------------------
     d = got("robots.check") or {}
@@ -190,6 +224,21 @@ def audit(deliverables: dict, gt: dict) -> list[tuple[str, bool, str]]:
                      (d.get("dataset_jsonld") is None and not d.get("figures"))
                      or (d.get("dataset_jsonld") is not None and
                          len(d["dataset_jsonld"]["variableMeasured"]) == len(d["figures"]))))
+    # "18 detected, 0 extracted, 0 rejected" was a window bug, not a quiet page: the excerpt sent for
+    # labelling stopped 6 characters before the first figure. Every measurable value must reach it.
+    out.append(check("every measurable value was shown to the extractor",
+                     d.get("excerpt_sent_covers") == d.get("chartable_values_found")
+                     or d.get("excerpt_covers_every_figure") is False,
+                     f"shown {d.get('excerpt_sent_covers')} of "
+                     f"{d.get('chartable_values_found')} measurable"))
+    out.append(check("numbers are classified, and only measurements are charted",
+                     isinstance(d.get("numeric_values_by_kind"), dict)
+                     and d.get("chartable_values_found", 0)
+                     <= d.get("statistics_detected_in_text", 0),
+                     f"{d.get('numeric_values_by_kind')}"))
+    out.append(check("a page with no measurable value explains itself rather than returning empty",
+                     d.get("chartable_values_found") != 0 or len(d.get("note", "")) > 80,
+                     f"note is {len(d.get('note', ''))} chars"))
 
     # --- content.audit: a quote must be real ------------------------------------------------------
     d = got("content.audit") or {}

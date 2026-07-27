@@ -5,11 +5,16 @@
 
   **Nothing is optimised until it is measured.**
 
-  Technical SEO, answer-engine readiness and AI visibility — 36 paid services, every answer signed.
+  Technical SEO, answer-engine readiness and AI visibility — sold one call at a time, to agents.
 
-  <sub>x402 on X Layer · USD₮0 · $0.005–$0.25 per call · no account, no key, no subscription</sub>
+  Whether **ChatGPT, Perplexity, Claude, Gemini and Google AI Overviews** can reach your page,
+  read it, and cite it — answered with evidence, and signed.
+
+  <sub>36 services · 28 checks · 289 tests · $0.005–$0.25 a call · x402 on X Layer · USD₮0 ·
+  no account, no key, no subscription</sub>
 
   [**Write-up**](https://comfortable-goal-205.notion.site/Doxa-3aa9c0ce7876810185e4e77ebb5bb5de) ·
+  [**Proof: every service, bought**](https://doxa.ivaronix.xyz/proof) ·
   [**Live service**](https://doxa.ivaronix.xyz) ·
   [**All 36 services**](https://doxa.ivaronix.xyz/services) ·
   [**Verify a receipt**](https://doxa.ivaronix.xyz/verify)
@@ -39,6 +44,20 @@ The same call on `react.dev` returns `asai.server_rendered`, 1.3%.
 The measurement is a **shingle diff over 8-word spans** between the raw HTTP response and the fully
 rendered DOM — not a length ratio, which would call any page that reformats its text "90%
 JavaScript-only".
+
+## Who this is for
+
+An SEO suite is priced per seat, per month, and assumes a person logs in and reads a dashboard. That
+is the wrong shape for an agent that needs one number, once, in the middle of a task — and the wrong
+price for a question worth half a cent.
+
+Doxa sells the checks individually. A robots policy check costs $0.005 and takes three seconds. The
+most expensive service here is $0.25. There is no account to create, no key to rotate and nothing to
+cancel: an agent pays for the call it makes, over x402, and gets a signed answer back.
+
+The trade is deliberate. A suite gives you rank tracking, historical charts and a crawl scheduler.
+Doxa gives you the measurements a model-driven answer depends on — and refuses the ones that cannot
+be measured honestly, which is [its own section below](#what-doxa-will-not-claim).
 
 ## What δόξα means, and why it is the name
 
@@ -126,7 +145,7 @@ uvicorn server:app --port 8000
 ```
 
 ```bash
-pytest -m "not network"       # 239 offline tests
+pytest -m "not network"       # 289 offline tests
 python scripts/e2e.py         # buys all 36 services in-process and checks the outcomes
 python scripts/paid_sweep.py  # buys all 36 over the wire with real x402 settlement
 python scripts/audit_outcomes.py   # checks the answers against independently established facts
@@ -143,7 +162,7 @@ Thresholds are ported rather than invented, and the source is named in the code 
 | Source | Licence | What it feeds |
 |---|---|---|
 | [SEONaut](https://github.com/StJudeWasHere/seonaut) | MIT | The technical taxonomy — 21 single-page and 9 cross-page reporters, thresholds used verbatim |
-| [geo-optimizer-skill](https://github.com/Auriti-Labs/geo-optimizer-skill) | MIT | The GEO rubric — 8 categories, published v4.0.0 weights, summing to exactly 100 |
+| [geo-optimizer-skill](https://github.com/Auriti-Labs/geo-optimizer-skill) | MIT | The GEO rubric — 8 categories, published v4.0.0 weights, summing to exactly 100; and the idea of classifying a page's numbers rather than counting them |
 | [geo-optimizer](https://github.com/geo-team-red/geo-optimizer) | MIT | Anti-citation signals and the AI-discovery endpoints |
 | [Common Crawl](https://commoncrawl.org) | open data | Corpus presence across 125 crawl indexes, keyless |
 | Wikipedia · Wikidata · Hacker News · GitHub · Stack Exchange | open APIs | Verifiable citations and real questions, keyless |
@@ -152,6 +171,13 @@ Thresholds are ported rather than invented, and the source is named in the code 
 into this service — a network-boundary copyleft would oblige Doxa to become AGPL too. Its good idea,
 that a browser driven by an agent does not need to paint, is implemented independently by blocking
 images and resources during render.
+
+Porting a threshold means porting the measurement beneath it, and that is easy to get wrong. SEONaut's
+200-word thin-content line is calibrated on a count that skips the whole subtree of every `<a>` and
+strips punctuation first — so its 200 counts prose, not navigation. Measured naively, python.org has
+1,024 words; measured SEONaut's way, 592. Applying a borrowed number to a different quantity is how a
+check quietly stops firing, so `content_words()` reproduces their measurement and the docstring says
+where it deliberately differs.
 
 ## Notes for anyone building an x402 service in Python
 
@@ -184,7 +210,7 @@ checks/            28 checks — the taxonomy, grouped by concern
 nodes/             the 36 services, one class each
 providers/         models, corpus, keyword sources
 scripts/           end-to-end, live and outcome-audit harnesses
-tests/             239 tests, most named after the bug they pin
+tests/             289 tests, most named after the bug they pin
 ```
 
 ## Licence

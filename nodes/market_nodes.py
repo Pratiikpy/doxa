@@ -293,9 +293,22 @@ class CorpusPresence(_MarketNode):
         if presence.unreachable:
             ctx.warn(f"{len(presence.unreachable)} crawl index(es) were unreachable. They are "
                      f"reported as unknown, not as zero coverage.")
-        if presence.crawls_present_in == 0 and not presence.unreachable:
+        # "Present in 0 of 2 crawl(s) checked" reads exactly like "this domain is not in Common
+        # Crawl", and that is what a 503 from every index used to produce — an outage rendered as a
+        # finding about the customer's site. A failure is never an absence, so the verdict has to
+        # distinguish "we looked and it is not there" from "we could not look".
+        reachable = presence.checked_indexes - len(presence.unreachable)
+        if reachable == 0:
+            d["verdict"] = (f"Coverage could not be measured: all {presence.checked_indexes} crawl "
+                            f"index(es) were unreachable. This says nothing about whether the domain "
+                            f"is in Common Crawl.")
+        elif presence.crawls_present_in == 0 and not presence.unreachable:
             d["verdict"] = ("Not present in any crawl index checked. Systems trained or grounded on "
                             "Common Crawl have not seen this domain.")
+        elif presence.unreachable:
+            d["verdict"] = (f"Present in {presence.crawls_present_in} of {reachable} crawl(s) that "
+                            f"could be reached; {len(presence.unreachable)} were unreachable and are "
+                            f"unknown, not zero.")
         else:
             d["verdict"] = (f"Present in {presence.crawls_present_in} of "
                             f"{presence.checked_indexes} crawl(s) checked.")
@@ -312,6 +325,13 @@ class CorpusPresence(_MarketNode):
             ValidationCheck(name="presence_count_matches_the_rows",
                             passed=result["crawls_present_in"] ==
                             sum(1 for r in rows if r["captures"] > 0)),
+            # The defect this pins: every index returned HTTP 503 and the verdict read
+            # "Present in 0 of 2 crawl(s) checked", which a customer reads as absence.
+            ValidationCheck(
+                name="an_unreachable_index_is_never_reported_as_absence",
+                passed=len(result["sources_unreachable"]) < result["indexes_checked"]
+                or "could not be measured" in result.get("verdict", ""),
+                detail="a source that could not be read says nothing about the customer's site"),
             ValidationCheck(name="sampling_is_disclaimed",
                             passed="not the whole of it" in result["caveat"]),
         ]
