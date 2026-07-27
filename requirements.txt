@@ -1,0 +1,21 @@
+# Runtime
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.2                 # the HTML and XML parser behind every check
+cryptography>=42.0        # Ed25519 receipt signing
+reportlab>=4.2            # report.pdf
+
+# JavaScript rendering. page.asai compares raw HTML against the rendered DOM, so without this that
+# one service is unavailable and says so explicitly; every other service still runs.
+scrapling>=0.2
+
+# Tests
+pytest>=8.0
+httpx>=0.27               # required by fastapi.testclient
+
+# Optional, production settlement only:
+#   okx-facilitator — imported lazily by x402.py when DOXA_X402_MODE=facilitator.
+#   Without it the server runs in signature mode, which is correct for local and staging.

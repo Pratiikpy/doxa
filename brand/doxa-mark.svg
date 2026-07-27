@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"
+     role="img" aria-labelledby="doxa-mark-title doxa-mark-desc">
+  <title id="doxa-mark-title">Doxa</title>
+  <desc id="doxa-mark-desc">A circle divided by a horizontal rule. The upper half is drawn solid, the
+    lower half dashed — what can be proven, and what can only be observed.</desc>
+
+  <!--
+    δόξα — appearance, opinion, how a thing seems. Plato sets it against ἐπιστήμη, knowledge, and
+    puts a line between them (Republic VI, 509d). That line is the mark.
+
+    Solid above: what is demonstrably on the page — the HTML, the headers, the schema. We read it and
+    we can prove it.
+
+    Dashed below: how the page is perceived — what a crawler actually manages to see, what a model
+    says about you when a buyer asks. Just as consequential, and only ever sampled. The dashes are an
+    honesty device: this half is observed, never certain, and the mark admits it.
+
+    The rule overhangs the circle on both sides, because it orders more than this one thing.
+
+    It resolves as an eye and as a horizon. Both are the same idea.
+  -->
+
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="18">
+    <!-- ἐπιστήμη — the demonstrable half, continuous -->
+    <path d="M 106 256 A 150 150 0 0 1 406 256"/>
+
+    <!-- δόξα — the apparent half, sampled -->
+    <path d="M 106 256 A 150 150 0 0 0 406 256" stroke-dasharray="27 19" stroke-linecap="butt" opacity="0.9"/>
+
+    <!-- the divided line -->
+    <path d="M 86 256 H 426"/>
+  </g>
+</svg>
