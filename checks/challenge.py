@@ -128,6 +128,15 @@ def looks_auditable(page: Page) -> tuple[bool, str]:
     if page.status and not page.ok:
         return False, (f"The URL returned HTTP {page.status}, so there is no page to audit. That "
                        f"status is itself the finding.")
+    # No status at all means nothing was ever returned — DNS did not resolve, the connection was
+    # refused, or the fetch was blocked. Falling through to the content-type branch reported that as
+    # "returned an unknown content type rather than HTML", which describes a response that never
+    # happened and sends the customer to check a header instead of their hostname. The real reason
+    # was already on the page object; it simply was not read.
+    if not page.status:
+        why = page.blocked_reason or page.error
+        return False, (f"The URL could not be fetched, so there is no page to audit: "
+                       f"{why or 'no response was received'}.")
     if not page.is_html:
         return False, (f"The URL returned {page.media_type or 'an unknown content type'} rather than "
                        f"HTML, so the page checks do not apply.")
