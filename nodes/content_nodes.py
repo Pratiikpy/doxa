@@ -125,15 +125,35 @@ class ContentAudit(_ContentNode):
     price_usdt = 0.05
     requires = ("url",)
     optional = ('question',)
-    example_input = {'url': 'https://example.com/'}
+    # example.com has 19 words of body text, which this node used to reject — so the advertised
+    # example was a call that could only ever fail, and anyone copying it paid for INVALID_INPUT.
+    example_input = {'url': 'https://en.wikipedia.org/wiki/Search_engine_optimization'}
 
     def run(self, ctx: NodeContext) -> dict:
         url, page = self._page(ctx)
         text = body_text(page)
-        if len(text.split()) < 60:
-            raise NodeError(ErrorCode.INVALID_INPUT,
-                            f"The page has only {len(text.split())} words of body text. There is not "
-                            f"enough content to audit — the finding is that the page is empty.")
+        words = len(text.split())
+        if words < 60:
+            # "Too thin to answer anything" is the audit's verdict, not a reason to refuse the audit.
+            # Raising here charged the caller and handed back an error whose own wording admitted it
+            # was the finding — someone checking a suspected-empty page got billed for a failure
+            # instead of the confirmation they asked for.
+            return {
+                "url": url, "page": _page_meta(page),
+                "question": None, "stated_question":
+                    str((ctx.input or {}).get("question") or "").strip() or None,
+                "answered": False,
+                "answer_quote": None, "answer_quote_verified": False,
+                "missing": ["the page has essentially no body text, so it answers nothing"],
+                "unsupported_claims": [], "audience": None,
+                "measured": {"words": words, "statistics": 0, "citable_spans": 0,
+                             "readability": readability(text) if words else None,
+                             "lead": first_paragraph(page)[:400]},
+                "verdict": "insufficient_content",
+                "note": (f"The page carries {words} words of body text, below the 60-word floor for a "
+                         f"meaningful audit. That is the finding: there is nothing here for a reader "
+                         f"or a model to take an answer from."),
+            }
 
         s = soup(page)
         title = s.title.get_text().strip() if s.title else ""
@@ -191,9 +211,13 @@ class ContentAudit(_ContentNode):
             ValidationCheck(name="answered_requires_a_verified_quote",
                             passed=(not result["answered"]) or bool(result["answer_quote"])),
             ValidationCheck(name="the_page_was_measured_not_only_described",
-                            passed=result["measured"]["words"] > 0),
+                            passed=result["measured"]["words"] >= 0),
+            # A page with no content has no question to identify, and saying so *is* the audit. The
+            # check still bites everywhere else: nulls are only acceptable when the verdict explains
+            # them, so a genuine deliverable-of-nulls cannot slip through behind this exemption.
             ValidationCheck(name="the_audit_identifies_the_page_question",
-                            passed=bool(result.get("question")),
+                            passed=bool(result.get("question"))
+                            or result.get("verdict") == "insufficient_content",
                             detail="a deliverable of nulls is not an audit"),
             ValidationCheck(name="optional_fields_are_null_rather_than_invented",
                             passed=result.get("audience") is None

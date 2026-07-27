@@ -129,8 +129,17 @@ class AuditDiff(Node):
     price_usdt = 0.02
     requires = ("before", "after")
     optional = ()
-    example_input = {"before": {"result": {"findings": []}},
-                     "after": {"result": {"findings": []}}}
+    # The example has to be a call that actually succeeds. This previously advertised two empty
+    # `findings` lists, which the comparison below rejected as having nothing to compare — so every
+    # caller who copied the documented example paid and received INVALID_INPUT. It now shows the
+    # thing the service is for: a fault present in the "before" audit and gone from the "after".
+    example_input = {
+        "before": {"result": {"findings": [
+            {"code": "title.missing", "severity": "error"},
+            {"code": "img.alt.missing", "severity": "warning"}]}},
+        "after": {"result": {"findings": [
+            {"code": "img.alt.missing", "severity": "warning"}]}},
+    }
     asp_type = "A2MCP"
     engine = "doxa-diff"
     engine_version = "1.0"
@@ -148,10 +157,19 @@ class AuditDiff(Node):
         after_r = after.get("result", after)
         b_findings = {f["code"]: f for f in (before_r.get("findings") or [])}
         a_findings = {f["code"]: f for f in (after_r.get("findings") or [])}
-        if not b_findings and not a_findings:
+
+        # Absent and empty are different answers, and conflating them charged for a refusal that was
+        # not warranted. A `findings` key that is simply missing means these are not audit envelopes
+        # and there is genuinely nothing to compare. Two *empty* lists are two clean audits, and
+        # "nothing was broken and nothing regressed" is a legitimate result someone may well be
+        # paying to confirm — refusing it told a caller their valid question was invalid.
+        b_has = isinstance(before_r.get("findings"), list)
+        a_has = isinstance(after_r.get("findings"), list)
+        if not b_has and not a_has:
             raise NodeError(ErrorCode.INVALID_INPUT,
-                            "Neither envelope contains a 'findings' list, so there is nothing to "
-                            "compare.")
+                            "Neither envelope has a 'findings' list, so these are not Doxa audit "
+                            "results and there is nothing to compare. Pass two audit envelopes, or "
+                            "the 'result' objects from them.")
 
         fixed = sorted(set(b_findings) - set(a_findings))
         introduced = sorted(set(a_findings) - set(b_findings))
