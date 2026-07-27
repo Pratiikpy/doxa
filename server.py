@@ -30,7 +30,7 @@ from contract import ArtifactRequest
 from nodes import build_registry
 from runtime import Runtime
 from x402 import (PAYMENT_HEADER, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
-                  build_challenge, verify_payment)
+                  build_challenge, malformed_payment, verify_payment)
 
 log = logging.getLogger("doxa")
 
@@ -282,6 +282,56 @@ async def paid_endpoint(endpoint: str, request: Request,
     if not authorization:
         return _challenge_response(endpoint)
 
+    # An unreadable header is answered before anything else. A caller with both a broken header and
+    # an empty body has two problems, and only the header error explains why paying again will not
+    # help — so it must not be hidden behind the input check that follows.
+    broken = malformed_payment(authorization)
+    if broken is not None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": broken.detail, "code": broken.code, "field": broken.field,
+                     "endpoint": endpoint,
+                     "expected": "base64 of the x402 v2 payment payload from your wallet; "
+                                 "call this endpoint with no payment header to get a challenge "
+                                 "to sign."})
+
+    # The input contract is checked *before* settlement. This block used to run after, which is how
+    # the first real agent-to-agent purchase of this service paid and received INVALID_INPUT: the
+    # money moved, then the server explained what should have been sent. Answering "you forgot the
+    # url" while keeping the fee is charging for nothing.
+    #
+    # The 200 and the body are unchanged from the reviewed behaviour on purpose — the only difference
+    # a client can observe is that they are no longer billed for it.
+    try:
+        _early = await request.json()
+    except Exception:  # noqa: BLE001
+        _early = {}
+    if not isinstance(_early, dict):
+        _early = {}
+    _early_input = _early.get("input") if isinstance(_early.get("input"), dict) else _early
+    _node = REGISTRY.get(endpoint)
+    if _node is not None:
+        _missing = [f for f in (_node.requires or ()) if not _early_input.get(f)]
+        if _missing:
+            contract = _node.input_contract()
+            unbilled = ("Nothing was billed for this call — your authorization was not settled. "
+                        "Send the example above with payment to get the real result.")
+            if not _early_input:
+                return JSONResponse(status_code=200, content={
+                    "endpoint": endpoint,
+                    "status": "input_required",
+                    "what_this_does": _describe(endpoint),
+                    "required": contract["required"],
+                    "optional": contract["optional"],
+                    "example_request": {"input": contract["example"]},
+                    "not_charged": unbilled})
+            return JSONResponse(status_code=422, content={
+                "error": f"missing required field(s): {', '.join(_missing)}",
+                "code": "missing_required_field", "endpoint": endpoint,
+                "required": contract["required"],
+                "example_request": {"input": contract["example"]},
+                "not_charged": unbilled})
+
     payment = verify_payment(authorization, SETTINGS, endpoint=endpoint,
                              fee_usdt=_price(endpoint))
     if not payment.ok:
@@ -322,29 +372,7 @@ async def paid_endpoint(endpoint: str, request: Request,
     node_input = payload.get("input") if isinstance(payload.get("input"), dict) else payload
     node = REGISTRY.get(endpoint)
 
-    # A paid call that arrives with nothing in it gets the input contract, at 200, rather than an
-    # error. The payment has already settled by the time this code runs, so answering "you forgot the
-    # url" and keeping the money is charging for nothing.
-    #
-    # This is not hypothetical. The first real agent-to-agent purchase of this service paid 0.005
-    # USDT and received INVALID_INPUT, because the buying agent's pre-check found no declared inputs
-    # and therefore sent an empty body. The contract is now advertised in the challenge so that
-    # cannot recur — and if a caller still sends nothing, they get something useful for their money.
-    missing = [f for f in (node.requires if node else ()) if not node_input.get(f)]
-    if node is not None and missing and not node_input:
-        contract = node.input_contract()
-        return JSONResponse(status_code=200, headers=headers_for(payment), content={
-            "endpoint": endpoint,
-            "status": "input_required",
-            "what_this_does": _describe(endpoint),
-            "required": contract["required"],
-            "optional": contract["optional"],
-            "example_request": {"input": contract["example"]},
-            "note": ("Your payment settled before this call reached us, so rather than return an "
-                     "error this is the contract for the endpoint. Send the example above to get "
-                     "the real result."),
-        })
-
+    # The input contract was checked before settlement (above), so by here the request is servable.
     req = ArtifactRequest(
         endpoint=endpoint,
         input=node_input,
