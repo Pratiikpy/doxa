@@ -8,6 +8,11 @@
   Technical SEO, answer-engine readiness and AI visibility — 36 paid services, every answer signed.
 
   <sub>x402 on X Layer · USD₮0 · $0.005–$0.25 per call · no account, no key, no subscription</sub>
+
+  [**Write-up**](https://comfortable-goal-205.notion.site/Doxa-3aa9c0ce7876810185e4e77ebb5bb5de) ·
+  [**Live service**](https://doxa.ivaronix.xyz) ·
+  [**All 36 services**](https://doxa.ivaronix.xyz/services) ·
+  [**Verify a receipt**](https://doxa.ivaronix.xyz/verify)
 </div>
 
 ---
