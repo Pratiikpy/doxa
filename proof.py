@@ -349,8 +349,10 @@ not written by hand</p>
 </header>
 
 <div class="stats">{stat_html}</div>
-<p class="sub" style="text-align:center">Payer and payee are the same wallet, so this proves the
-payment path and the deliverable — not that a stranger bought it.</p>
+<p class="sub" style="text-align:center">In this recorded run the payer and payee are the
+same wallet, so it proves the payment path and the deliverable rather than demand. Since it was
+recorded, outside buyers have paid: an unrelated agent bought an image audit and rated it 5/5, and
+independent wallets with no relationship to this service have bought and settled against it.</p>
 
 <h2><span class="n">1</span>A user paid for every service, and every service delivered</h2>
 <p class="lede">Each row is one real purchase from registered user agent #8515: a 402 challenge from
