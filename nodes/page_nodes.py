@@ -473,8 +473,29 @@ class PageChunk(Node):
         max_words = int((ctx.options or {}).get("max_words", 220))
         page = _fetch(ctx, url)
         spans = citable_spans(page, max_words=max(40, min(max_words, 600)))
+        # Say how the passages were found, and say something when there are none.
+        #
+        # A page that fetched at 200 with several readable paragraphs returned `spans: 0, words: 0`
+        # and not one word explaining it. The buyer could not tell whether their page had nothing
+        # citable, or this service was broken. Either answer is worth the fee; silence is not.
+        method = ("block_elements" if any(s.get("source") == "block" for s in spans)
+                  else "text_blocks" if spans else "none")
+        note = None
+        if method == "text_blocks":
+            note = ("This page has no block-level markup — no <p>, <li> or <td> — so the passages "
+                    "below were split on blank lines in the extracted text instead. They are real "
+                    "passages with real offsets, but the boundaries are inferred rather than taken "
+                    "from the document's own structure. Adding paragraph tags would make them exact, "
+                    "and would also make the page easier for a retrieval system to quote.")
+        elif not spans:
+            note = ("No citable passage was found. The page fetched successfully, so this is a "
+                    "statement about its content, not a failure: after removing navigation, script "
+                    "and boilerplate there was no run of prose long enough to quote. A page that "
+                    "cannot be quoted cannot be cited by an answer engine.")
         return {"page": _page_meta(page),
                 "spans": spans,
+                "chunking_method": method,
+                "note": note,
                 "totals": {"spans": len(spans),
                            "words": sum(s["words"] for s in spans),
                            "with_heading": sum(1 for s in spans if s["heading"])}}

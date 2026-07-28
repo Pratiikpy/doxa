@@ -369,3 +369,36 @@ def test_stuffing_an_unrelated_term_is_still_caught():
     p = page(doc(title="Cheap flights to anywhere", body=body), url="https://site.test/p")
     f = find(p, "clutter.keyword_stuffing")
     assert f is not None and f.detail["term"] == "flights"
+
+
+def test_a_page_with_no_block_markup_still_yields_passages():
+    """A rendered app that lays its prose out in bare <div>s is not an unquotable page.
+
+    Measured against the live service: a page that fetched at HTTP 200 with several readable
+    paragraphs returned `spans: 0, words: 0` and no explanation, because the walk needs <p>/<li>/<td>
+    and that document had none. The buyer could not tell whether their page had nothing citable or
+    the service was broken.
+    """
+    html = ("<html><body>"
+            "<div>Assistants read pages and cite the source, which changes what a page has to do.</div>"
+            "<div>Three things matter most, and the first is putting the answer above the fold.</div>"
+            "</body></html>")
+    spans = citable_spans(page(html))
+    assert spans, "a div-only page still has quotable prose"
+    assert all(s["source"] == "text" for s in spans)
+    assert all(s["end"] - s["start"] == len(s["text"]) for s in spans)
+    assert all(s["words"] > 0 and s["text"].strip() for s in spans)
+
+
+def test_proper_markup_is_still_read_from_the_markup():
+    """The fallback must never take over from a document that has real structure — a passage inferred
+    from a blank line is a weaker claim than one taken from a <p>, and the two are not interchangeable."""
+    html = "<html><body><h2>Heading</h2><p>Assistants read pages and cite the source today.</p></body></html>"
+    spans = citable_spans(page(html))
+    assert spans and all(s["source"] == "block" for s in spans)
+    assert spans[0]["heading"] == "Heading"
+
+
+def test_a_page_with_no_prose_at_all_yields_nothing():
+    """Empty is still a legitimate answer, and must stay distinguishable from the fallback firing."""
+    assert citable_spans(page("<html><body><nav>Home About</nav></body></html>")) == []

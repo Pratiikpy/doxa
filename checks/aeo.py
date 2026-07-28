@@ -285,7 +285,7 @@ def citable_spans(page: Page, *, max_words: int = 220) -> list[dict[str, Any]]:
         body = " ".join(buffer).strip()
         if body:
             spans.append({"heading": heading, "text": body, "words": len(body.split()),
-                          "start": offset, "end": offset + len(body)})
+                          "start": offset, "end": offset + len(body), "source": "block"})
             offset += len(body) + 1
         buffer = []
 
@@ -301,6 +301,38 @@ def citable_spans(page: Page, *, max_words: int = 220) -> list[dict[str, Any]]:
             flush()
         buffer.append(text)
     flush()
+
+    if spans:
+        return spans
+
+    # No block elements, but that does not mean no content.
+    #
+    # Measured on a 955-byte page that fetched cleanly at HTTP 200 with several readable paragraphs:
+    # zero spans, zero words, and nothing in the response saying why. The buyer paid for a chunk
+    # extract and got an empty list they could not distinguish from "your page has no citable
+    # content" — or from the service being broken.
+    #
+    # The gap is not exotic. The walk above needs <p>/<li>/<td> and finds nothing in a plain-text
+    # document, a raw markdown file, an llms.txt — a file Doxa sells a separate check for, so a
+    # customer arriving here with one is the expected path, not a corner case — or a rendered
+    # single-page app that lays its prose out in bare <div>s.
+    #
+    # So: fall back to the extracted text, split on blank lines the way a retrieval system would when
+    # markup gives it nothing to go on. Same span shape, same honest offsets. Callers are told which
+    # route produced their spans via `chunking_method` on the node, because a paragraph inferred from
+    # a blank line is a weaker claim than one taken from a <p> and should not be presented as equal.
+    flat = re.sub(r"[ \t]+", " ", root.get_text("\n")).strip()
+    for block in re.split(r"\n\s*\n+", flat):
+        chunk = re.sub(r"\s+", " ", block).strip()
+        if len(chunk.split()) < 4:                 # a stray word is not a citable passage
+            continue
+        while chunk:
+            words = chunk.split()
+            head = " ".join(words[:max_words])
+            spans.append({"heading": heading, "text": head, "words": len(head.split()),
+                          "start": offset, "end": offset + len(head), "source": "text"})
+            offset += len(head) + 1
+            chunk = " ".join(words[max_words:])
     return spans
 
 
