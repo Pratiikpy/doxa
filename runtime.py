@@ -89,6 +89,36 @@ def sha256_hex(data) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+# Measurements OF the measurement. They describe how long this particular fetch took, not what was
+# found, and they differ on every run by construction.
+#
+# `output_hash` covered them, and the consequence was not cosmetic. The runtime re-runs any node
+# declaring `deterministic = True` and promotes it to L3_REPRODUCED when the two digests match — so
+# every page node did a second full fetch and audit of the customer's site on every single call, to
+# compare a hash that could never agree, and was capped at L2 forever.
+#
+# Measured live before the change: page.audit, page.readability, page.chunk and schema.validate all
+# carried `ttfb_ms` in their result and all returned L2_VALIDATED; robots.check carries no timing and
+# returned L3_REPRODUCED. Perfect correlation across the set, which is what turned a suspicion into
+# a cause.
+#
+# So the digest covers the content and not the stopwatch. The fields stay in the response — a buyer
+# who wants to know the page was slow should still be told — they are simply not part of what the
+# hash attests to. `output_hash_excludes` is published in the envelope so the digest remains
+# something the buyer can recompute for themselves offline, which is the entire point of it.
+VOLATILE_RESULT_KEYS = frozenset({"ttfb_ms", "total_ms", "duration_ms", "elapsed_ms",
+                                  "elapsed_seconds", "fetched_at", "measured_at"})
+
+
+def stable_view(value):
+    """`value` with per-run timing removed, at any depth — what the output digest attests to."""
+    if isinstance(value, dict):
+        return {k: stable_view(v) for k, v in value.items() if k not in VOLATILE_RESULT_KEYS}
+    if isinstance(value, list):
+        return [stable_view(v) for v in value]
+    return value
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -426,7 +456,7 @@ class Runtime:
                               humanise_error(e), started,
                               input_hashes=input_hashes, warnings=ctx.warnings)
 
-        output_hash = sha256_hex(result)
+        output_hash = sha256_hex(stable_view(result))
 
         # L2: validation
         checks = node.validate(result, ctx)
@@ -442,7 +472,7 @@ class Runtime:
             try:
                 ctx2 = NodeContext(request, self.settings, job_id)
                 result2 = node.run(ctx2)
-                if sha256_hex(result2) == output_hash:
+                if sha256_hex(stable_view(result2)) == output_hash:
                     level = VerificationLevel.L3_REPRODUCED
             except Exception:  # noqa
                 ctx.warn("reproduction attempt failed; staying at L2")

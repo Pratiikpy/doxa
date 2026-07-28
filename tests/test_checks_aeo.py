@@ -402,3 +402,45 @@ def test_proper_markup_is_still_read_from_the_markup():
 def test_a_page_with_no_prose_at_all_yields_nothing():
     """Empty is still a legitimate answer, and must stay distinguishable from the fallback firing."""
     assert citable_spans(page("<html><body><nav>Home About</nav></body></html>")) == []
+
+
+def test_the_output_digest_ignores_how_long_the_fetch_took():
+    """Two identical audits of the same page must produce the same digest.
+
+    They did not. `output_hash` covered `ttfb_ms` and `total_ms` from the page metadata, so a
+    38ms fetch and a 37ms fetch of the same unchanged page hashed differently. That is not cosmetic:
+    the runtime re-runs any node declaring `deterministic = True` and promotes it to L3_REPRODUCED
+    when the digests agree, so every page node paid for a second full fetch and audit of the
+    customer's site on every call to compare a hash that could never match, and stayed at L2 forever.
+
+    Measured live: page.audit, page.readability, page.chunk and schema.validate all carry `ttfb_ms`
+    and all returned L2_VALIDATED; robots.check carries none and returned L3_REPRODUCED.
+    """
+    from runtime import sha256_hex, stable_view
+
+    slow = {"page": {"url": "https://x/", "status": 200, "ttfb_ms": 38, "total_ms": 73},
+            "findings": [{"code": "title.missing", "severity": "high"}]}
+    fast = {"page": {"url": "https://x/", "status": 200, "ttfb_ms": 37, "total_ms": 39},
+            "findings": [{"code": "title.missing", "severity": "high"}]}
+
+    assert sha256_hex(slow) != sha256_hex(fast), "the raw bodies really do differ"
+    assert sha256_hex(stable_view(slow)) == sha256_hex(stable_view(fast))
+
+
+def test_a_real_content_change_still_changes_the_digest():
+    """Stripping timing must not blunt the digest — that would be a far worse bug than the one fixed."""
+    from runtime import sha256_hex, stable_view
+
+    base = {"page": {"url": "https://x/", "ttfb_ms": 40}, "findings": [{"code": "title.missing"}]}
+    changed = {"page": {"url": "https://x/", "ttfb_ms": 40}, "findings": [{"code": "canonical.missing"}]}
+    assert sha256_hex(stable_view(base)) != sha256_hex(stable_view(changed))
+
+
+def test_timing_is_removed_at_any_depth_but_stays_in_the_response():
+    from runtime import stable_view
+
+    nested = {"a": {"b": [{"ttfb_ms": 5, "keep": 1}]}, "elapsed_seconds": 2.0, "keep": "yes"}
+    out = stable_view(nested)
+    assert out == {"a": {"b": [{"keep": 1}]}, "keep": "yes"}
+    # the original is untouched — the buyer is still shown the timing
+    assert nested["elapsed_seconds"] == 2.0 and nested["a"]["b"][0]["ttfb_ms"] == 5

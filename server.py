@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse, Response
 from config import get_settings
 from contract import ArtifactRequest
 from nodes import build_registry
-from runtime import Runtime
+from runtime import VOLATILE_RESULT_KEYS, Runtime
 from x402 import (PAYMENT_HEADER, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
                   build_challenge, malformed_payment, verify_payment)
 
@@ -420,6 +420,19 @@ def verify_instructions() -> dict:
             "fields": ["endpoint", "input_hashes", "output_hash", "tool", "level", "job_id"],
             "note": "All six are echoed in the envelope, so the manifest can be rebuilt from the "
                     "response alone and compared against receipt.manifest_sha256.",
+        },
+        "output_hash": {
+            "how": "sha256 of the canonical JSON of `result`, with the per-run timing keys below "
+                   "removed at every depth first.",
+            "excludes": sorted(VOLATILE_RESULT_KEYS),
+            "why": "Those fields measure how long this particular fetch took, not what was found, "
+                   "and they differ on every run. Hashing them meant two identical audits of the "
+                   "same page never produced the same digest — so the digest could not be used to "
+                   "compare runs, and the runtime's own reproduction check could never pass. They "
+                   "are still in the response; they are simply not what the hash attests to.",
+            "note": "Remove these keys from `result`, canonicalise, sha256, and you must get "
+                    "`output_hash` exactly. The digest stays verifiable offline from the response "
+                    "alone.",
         },
         "steps": [
             "Rebuild the manifest from the envelope's endpoint, input_hashes, output_hash, tool, "
