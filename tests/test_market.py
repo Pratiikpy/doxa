@@ -157,3 +157,26 @@ def test_wikipedia_citations_are_articles_not_talk_pages():
     assert cites
     assert not any(c.title.startswith(("User talk:", "Talk:", "Wikipedia:")) for c in cites)
     assert all(c.url.startswith("https://en.wikipedia.org/wiki/") for c in cites)
+
+
+def test_an_unreachable_crawl_index_is_not_reported_as_zero_presence():
+    """A crawl index that could not be reached is not a crawl the domain is absent from.
+
+    `corpus.presence` has always drawn that distinction — it lists the unreachable crawls and warns
+    "reported as unknown, not as zero coverage". `links.compare` read two numbers off the same
+    object and dropped it, so while Common Crawl's index was timing out it reported stripe.com and
+    adyen.com at 0 corpus presence each, with `sources_unreachable: []`, no warning, and a computed
+    gap over data that was never measured. Stripe is certainly in Common Crawl.
+    """
+    import inspect
+
+    from nodes.market_nodes import LinksCompare
+
+    src = inspect.getsource(LinksCompare.run)
+    # The unreachable list must be read from the presence object and reach the caller.
+    assert 'pdict.get("sources_unreachable")' in src
+    assert '"corpus_unreachable"' in src
+    # And the gap must be withdrawn rather than computed from unmeasured numbers.
+    assert 'out["gap"]["corpus_urls_sampled"] = None' in src
+    assert 'corpus_note' in src
+    assert "ctx.warn(" in src

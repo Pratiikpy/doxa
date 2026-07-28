@@ -431,18 +431,33 @@ class LinksCompare(_MarketNode):
                                     f"Citations could not be gathered, so no fair comparison is "
                                     f"possible: {e}") from e
 
+        corpus_down: list[str] = []
         for host in (mine, theirs):
             cites, presence = measured[host]
+            pdict = presence.as_dict()
+            # A crawl index that could not be reached is not a crawl the domain is absent from.
+            #
+            # `corpus.presence` has always drawn that distinction — it reports each unreachable
+            # crawl, lists them, and warns "reported as unknown, not as zero coverage". This node
+            # reads two numbers off the same object and dropped it, so while Common Crawl's index
+            # was timing out it reported stripe.com and adyen.com at **0 corpus presence each**,
+            # with `sources_unreachable: []`, no warning, and a computed gap over data that was
+            # never measured. Stripe is certainly in Common Crawl; the buyer was told otherwise for
+            # twenty cents and given no way to tell.
+            corpus_unreachable = pdict.get("sources_unreachable") or []
+            if corpus_unreachable:
+                corpus_down.append(host)
             out["sides"][host] = {"citations": cites["total"],
                                   "by_source": cites["by_source"],
                                   "sources_unreachable": cites["sources_unreachable"],
                                   "corpus_crawls_present_in": presence.crawls_present_in,
                                   "corpus_urls_seen": len(presence.unique_urls),
                                   "corpus_urls_capped": presence.any_capped,
+                                  "corpus_unreachable": corpus_unreachable or None,
                                   # The uncapped scale signal. Sampled URL counts both hit the same
                                   # cap on any large site, which would make two very different
                                   # domains look identical.
-                                  "corpus_index_blocks": presence.as_dict()["index_blocks_latest"],
+                                  "corpus_index_blocks": pdict["index_blocks_latest"],
                                   "top": cites["citations"][:10]}
 
         a, b = out["sides"][mine], out["sides"][theirs]
@@ -457,6 +472,20 @@ class LinksCompare(_MarketNode):
         out["caveat"] = ("Both domains were measured with the same sources and the same limits, so "
                          "the comparison is fair even though neither figure is a complete backlink "
                          "count.")
+        if corpus_down:
+            # Withdraw the corpus half of the comparison rather than reporting a difference between
+            # two numbers neither of which was measured. The citation half is unaffected and still
+            # stands on its own.
+            out["gap"]["corpus_index_blocks"] = None
+            out["gap"]["corpus_urls_sampled"] = None
+            out["gap"]["corpus_note"] = (
+                f"The Common Crawl index was unreachable for {', '.join(corpus_down)}, so the corpus "
+                f"figures above are unknown rather than zero and no corpus gap is reported. The "
+                f"citation comparison is unaffected.")
+            out["caveat"] += (" Corpus presence could not be measured on this run — see "
+                              "gap.corpus_note — so only the citation figures are comparable.")
+            ctx.warn("The Common Crawl index was unreachable, so corpus presence is reported as "
+                     "unknown rather than zero and the corpus gap is withheld.")
         return out
 
     def validate(self, result: dict, ctx: NodeContext) -> list[ValidationCheck]:
