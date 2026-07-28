@@ -16,7 +16,9 @@ reported as an outage rather than as a finding.
 """
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import logging
 import time
 from pathlib import Path
@@ -35,6 +37,8 @@ from x402 import (PAYMENT_HEADER, PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEAD
 log = logging.getLogger("doxa")
 
 SETTINGS = get_settings()
+# Set only in this host's environment. Empty means the internal door does not exist at all.
+_INTERNAL_SECRET = os.environ.get("DOXA_INTERNAL_SECRET", "").strip()
 REGISTRY = build_registry()
 RUNTIME = Runtime(REGISTRY)
 
@@ -240,8 +244,14 @@ def well_known_x402() -> dict:
 
 
 def headers_for(payment) -> dict:
-    """The settlement receipt header, when the facilitator returned one."""
-    return {PAYMENT_RESPONSE_HEADER: payment.response_header} if payment.response_header else {}
+    """The settlement receipt header, when the facilitator returned one.
+
+    `payment` is None on the internal path, where the A2A daemon has already been paid through
+    escrow and nothing settles here — so there is no receipt to echo.
+    """
+    if payment is None or not payment.response_header:
+        return {}
+    return {PAYMENT_RESPONSE_HEADER: payment.response_header}
 
 
 def _contract(endpoint: str) -> dict | None:
@@ -262,7 +272,8 @@ def _challenge_response(endpoint: str) -> Response:
 @app.api_route("/a2mcp/{endpoint:path}", methods=["GET", "POST", "PUT", "HEAD", "OPTIONS"])
 async def paid_endpoint(endpoint: str, request: Request,
                         x_payment: str | None = Header(default=None),
-                        payment_signature: str | None = Header(default=None)) -> Response:
+                        payment_signature: str | None = Header(default=None),
+                        x_doxa_internal: str | None = Header(default=None)) -> Response:
     """One paid service call.
 
     Payment is resolved before the body is read. The listing validator probes with no body at all and
@@ -278,14 +289,27 @@ async def paid_endpoint(endpoint: str, request: Request,
     # The OKX agentic wallet sends `PAYMENT-SIGNATURE`; `X-PAYMENT` is the older name and is still
     # accepted. Reading only one of them means a customer paying through the official wallet is
     # handed a 402 for a payment they have already signed.
+    # The A2A daemon has already been paid for this job through the marketplace's escrow, and it
+    # calls the engine on localhost to produce the deliverable. Without a way in it would have to pay
+    # a second time for work the customer has bought once — which is why the shared wrapper answered
+    # every Doxa A2A customer as a different agent instead: it had no route to this engine at all.
+    #
+    # Deliberately narrow. It is a constant-time comparison against a secret that exists only in this
+    # host's environment, never a header a client can simply assert, and never an origin or
+    # Sec-Fetch-Site check — any HTTP client can forge those, which would hand the OKX validator a
+    # paid result for free and fail x402 review. Unset secret means the door does not exist.
+    internal = (x_doxa_internal or "").strip()
+    internal_ok = bool(_INTERNAL_SECRET) and len(internal) == len(_INTERNAL_SECRET) and \
+        hmac.compare_digest(internal, _INTERNAL_SECRET)
+
     authorization = payment_signature or x_payment
-    if not authorization:
+    if not authorization and not internal_ok:
         return _challenge_response(endpoint)
 
     # An unreadable header is answered before anything else. A caller with both a broken header and
     # an empty body has two problems, and only the header error explains why paying again will not
     # help — so it must not be hidden behind the input check that follows.
-    broken = malformed_payment(authorization)
+    broken = None if internal_ok else malformed_payment(authorization)
     if broken is not None:
         return JSONResponse(
             status_code=400,
@@ -332,9 +356,9 @@ async def paid_endpoint(endpoint: str, request: Request,
                 "example_request": {"input": contract["example"]},
                 "not_charged": unbilled})
 
-    payment = verify_payment(authorization, SETTINGS, endpoint=endpoint,
-                             fee_usdt=_price(endpoint))
-    if not payment.ok:
+    payment = None if internal_ok else verify_payment(
+        authorization, SETTINGS, endpoint=endpoint, fee_usdt=_price(endpoint))
+    if payment is not None and not payment.ok:
         if payment.malformed:
             # The header could not be decoded at all. That is the caller's bug, not a payment
             # problem — paying again would change nothing — so it gets a typed 400 naming the field
